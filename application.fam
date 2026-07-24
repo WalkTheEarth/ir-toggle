@@ -3,7 +3,7 @@ App(
     apptype=FlipperAppType.EXTERNAL,
     name="IR Toggle",
     entry_point="ir_toggle_main",
-    fap_category="GPIO",
+    fap_category="Infrared",
     fap_description="Toggle the IR LED on/off like a flashlight",
     fap_author="walktheearth",
     fap_version="1.0",
