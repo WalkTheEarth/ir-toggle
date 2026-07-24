@@ -1,6 +1,5 @@
 #include <furi.h>
-#include <furi_hal_pwm.h>
-#include <furi_hal_resources.h>
+#include <furi_hal_infrared.h>
 #include <gui/gui.h>
 #include <input/input.h>
 
@@ -13,6 +12,26 @@ typedef struct {
     bool ir_is_on;
     bool running;
 } IrToggleApp;
+
+/*
+ * ISR callback — provides timing data for the IR DMA engine.
+ * Runs in interrupt context, so no blocking calls.
+ * Returns Ok with level=1 to keep the 38kHz carrier running continuously.
+ * Returns LastDone when the app has toggled IR off.
+ */
+static FuriHalInfraredTxGetDataState tx_isr_callback(void* ctx, uint32_t* duration, bool* level) {
+    IrToggleApp* app = (IrToggleApp*)ctx;
+
+    if(app->ir_is_on) {
+        *level = true;
+        *duration = 50000; /* 50 ms carrier-on chunks, repeats indefinitely */
+        return FuriHalInfraredTxGetDataStateOk;
+    } else {
+        *level = false;
+        *duration = 0;
+        return FuriHalInfraredTxGetDataStateLastDone;
+    }
+}
 
 /* Draw callback — runs in GUI thread */
 static void draw_callback(Canvas* canvas, void* ctx) {
@@ -41,15 +60,17 @@ static void input_callback(InputEvent* event, void* ctx) {
     furi_message_queue_put(app->event_queue, event, FuriWaitForever);
 }
 
-/* Toggle the IR LED on or off */
-static void toggle_ir(IrToggleApp* app) {
-    if(app->ir_is_on) {
-        furi_hal_pwm_stop(FuriHalPwmOutputIdTim1PA7);
-        app->ir_is_on = false;
-    } else {
-        furi_hal_pwm_start(FuriHalPwmOutputIdTim1PA7, 38000, 50);
-        app->ir_is_on = true;
-    }
+/* Turn IR on: configure internal LEDs, register ISR, start 38 kHz carrier */
+static void ir_turn_on(IrToggleApp* app) {
+    furi_hal_infrared_set_tx_output(FuriHalInfraredTxPinInternal);
+    furi_hal_infrared_async_tx_set_data_isr_callback(tx_isr_callback, app);
+    furi_hal_infrared_async_tx_start(38000, 0.5f);
+}
+
+/* Turn IR off: signal stop via ISR, then block until transmission fully ends */
+static void ir_turn_off(void) {
+    furi_hal_infrared_async_tx_stop();
+    furi_hal_infrared_async_tx_wait_termination();
 }
 
 /* Entry point */
@@ -80,7 +101,13 @@ int32_t ir_toggle_main(void* p) {
         if(event.type == InputTypePress) {
             if(event.key == InputKeyOk) {
                 furi_mutex_acquire(app->mutex, FuriWaitForever);
-                toggle_ir(app);
+                if(app->ir_is_on) {
+                    app->ir_is_on = false; /* ISR callback sees this and returns LastDone */
+                    ir_turn_off();
+                } else {
+                    app->ir_is_on = true; /* ISR callback must see this before TX starts */
+                    ir_turn_on(app);
+                }
                 furi_mutex_release(app->mutex);
                 view_port_update(app->view_port);
             } else if(event.key == InputKeyBack) {
@@ -89,9 +116,10 @@ int32_t ir_toggle_main(void* p) {
         }
     }
 
-    /* Cleanup — ensure IR is off */
+    /* Cleanup — ensure IR is fully off before freeing resources */
     if(app->ir_is_on) {
-        furi_hal_pwm_stop(FuriHalPwmOutputIdTim1PA7);
+        app->ir_is_on = false;
+        ir_turn_off();
     }
 
     gui_remove_view_port(app->gui, app->view_port);
