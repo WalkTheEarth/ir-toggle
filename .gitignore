@@ -1,0 +1,11 @@
+# Flipper Zero build output
+build/
+dist/
+.ufbt/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
