@@ -67,9 +67,10 @@ static void ir_turn_on(IrToggleApp* app) {
     furi_hal_infrared_async_tx_start(38000, 0.5f);
 }
 
-/* Turn IR off: signal stop via ISR, then block until transmission fully ends */
+/* Turn IR off: ISR sees ir_is_on==false, returns LastDone, transmission stops.
+ * wait_termination() blocks until the ISR fires and DMA cleanup completes.
+ * Only call ONE of stop()/wait_termination() — both free resources. */
 static void ir_turn_off(void) {
-    furi_hal_infrared_async_tx_stop();
     furi_hal_infrared_async_tx_wait_termination();
 }
 
