@@ -67,11 +67,14 @@ static void ir_turn_on(IrToggleApp* app) {
     furi_hal_infrared_async_tx_start(38000, 0.5f);
 }
 
-/* Turn IR off: ISR sees ir_is_on==false, returns LastDone, transmission stops.
- * wait_termination() blocks until the ISR fires and DMA cleanup completes.
- * Only call ONE of stop()/wait_termination() — both free resources. */
+/*
+ * Turn IR off.
+ * stop() is non-blocking — it sets a flag so the next ISR invocation
+ * returns LastDone and the DMA engine frees resources asynchronously.
+ * Do NOT call wait_termination() after stop() — both free resources.
+ */
 static void ir_turn_off(void) {
-    furi_hal_infrared_async_tx_wait_termination();
+    furi_hal_infrared_async_tx_stop();
 }
 
 /* Entry point */
@@ -103,10 +106,10 @@ int32_t ir_toggle_main(void* p) {
             if(event.key == InputKeyOk) {
                 furi_mutex_acquire(app->mutex, FuriWaitForever);
                 if(app->ir_is_on) {
-                    app->ir_is_on = false; /* ISR callback sees this and returns LastDone */
+                    app->ir_is_on = false; /* ISR sees this, returns LastDone next firing */
                     ir_turn_off();
                 } else {
-                    app->ir_is_on = true; /* ISR callback must see this before TX starts */
+                    app->ir_is_on = true; /* ISR must see this before TX starts */
                     ir_turn_on(app);
                 }
                 furi_mutex_release(app->mutex);
@@ -120,7 +123,9 @@ int32_t ir_toggle_main(void* p) {
     /* Cleanup — ensure IR is fully off before freeing resources */
     if(app->ir_is_on) {
         app->ir_is_on = false;
-        ir_turn_off();
+        furi_hal_infrared_async_tx_stop();
+        /* Give the DMA ISR time to fire and free resources (1 chunk ≤ 50 ms) */
+        furi_delay_ms(60);
     }
 
     gui_remove_view_port(app->gui, app->view_port);
